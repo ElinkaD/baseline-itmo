@@ -1,3 +1,5 @@
+import requests
+import json
 import time
 from typing import List
 
@@ -5,11 +7,57 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import HttpUrl
 from schemas.request import PredictionRequest, PredictionResponse
 from utils.logger import setup_logger
+import xml.etree.ElementTree as ET
+
 
 # Initialize
 app = FastAPI()
 logger = None
 
+def search_yandex(query_text, api_key, folder_id):
+    url = "https://yandex.ru/search/xml"  # Пример эндпоинта (уточните у Yandex)
+    headers = {
+        "Authorization": f"Api-Key {api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "query": {
+            "searchType": "web",  
+            "queryText": query_text,  
+            "familyMode": "false", 
+            "page": 0,  
+            "fixTypoMode": "true"  
+        },
+        "sortSpec": {
+            "sortMode": "rlv", 
+            "sortOrder": "desc"  
+        },
+        "groupSpec": {
+            "groupMode": "flat",  
+            "groupsOnPage": 3,  
+            "docsInGroup": 1  
+        },
+        "maxPassages": 3,  # Максимум 3 пассажа
+        "region": 2, 
+        "l10N": "ru",  
+        "folderId": folder_id, 
+        "responseFormat": "json", 
+        "userAgent": ""  
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    if response.status_code == 200:
+        return response.json()  # Возвращаем JSON-ответ
+    else:
+        return None
+    
+def determine_correct_answer(query, deepseek_api_key):
+
+    prompt = f"Вопрос: {query}\n\nВыбери правильный вариант ответа (1, 2, 3 или 4) и верни только номер."
+    response = generate_answer_with_deepseek(prompt, deepseek_api_key)
+    try:
+        return int(response.strip())
+    except ValueError:
+        return None
 
 @app.on_event("startup")
 async def startup_event():
@@ -54,16 +102,26 @@ async def predict(body: PredictionRequest):
     try:
         await logger.info(f"Processing prediction request with id: {body.id}")
         # Здесь будет вызов вашей модели
-        answer = 1  # Замените на реальный вызов модели
-        sources: List[HttpUrl] = [
-            HttpUrl("https://itmo.ru/ru/"),
-            HttpUrl("https://abit.itmo.ru/"),
-        ]
+        yandex_api_key = "AQVN0AW2sXoFSGvGtrJun4y24NBsRTrWPZNfD7ya"
+        folder_id = "b1gqvivb2mft2ir3a8ds"
 
+        yandex_results = search_yandex(body.id, yandex_api_key, folder_id)
+        sources = []
+        if yandex_results and "results" in yandex_results:
+            sources = [result["url"] for result in yandex_results["results"]]
+        else:
+            await logger.warning(f"No results found for query: {body.query}")
+
+        deepseek_api_key = "your-deepseek-api-key" 
+        reasoning = generate_answer_with_deepseek(body.query, deepseek_api_key)
+        if not reasoning:
+            reasoning = "Не удалось сгенерировать ответ с использованием языковой модели."
+
+        answer = determine_correct_answer(body.query, deepseek_api_key)
         response = PredictionResponse(
             id=body.id,
             answer=answer,
-            reasoning="Из информации на сайте",
+            reasoning=reasoning,
             sources=sources,
         )
         await logger.info(f"Successfully processed request {body.id}")

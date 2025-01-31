@@ -3,3 +3,9 @@ aiologger[aiofiles]
 pip-chill
 uvicorn
 gunicorn
+
+
+requests
+beautifulsoup4
+transformers
+python-dotenv
